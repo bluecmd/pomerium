@@ -38,33 +38,9 @@ var tcpCmd = &cobra.Command{
 	Use:  "tcp destination",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dstHost := args[0]
-		dstHostname, _, err := net.SplitHostPort(dstHost)
+		tun, err := newTCPTunnel(args[0], tcpCmdOptions.pomeriumURL)
 		if err != nil {
-			return fmt.Errorf("invalid destination: %w", err)
-		}
-
-		pomeriumURL := &url.URL{
-			Scheme: "https",
-			Host:   net.JoinHostPort(dstHostname, "443"),
-		}
-		if tcpCmdOptions.pomeriumURL != "" {
-			pomeriumURL, err = url.Parse(tcpCmdOptions.pomeriumURL)
-			if err != nil {
-				return fmt.Errorf("invalid pomerium URL: %w", err)
-			}
-			if !strings.Contains(pomeriumURL.Host, ":") {
-				if pomeriumURL.Scheme == "https" {
-					pomeriumURL.Host = net.JoinHostPort(pomeriumURL.Hostname(), "443")
-				} else {
-					pomeriumURL.Host = net.JoinHostPort(pomeriumURL.Hostname(), "80")
-				}
-			}
-		}
-
-		var tlsConfig *tls.Config
-		if pomeriumURL.Scheme == "https" {
-			tlsConfig = getTLSConfig()
+			return err
 		}
 
 		l := zerolog.New(zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
@@ -80,12 +56,6 @@ var tcpCmd = &cobra.Command{
 			cancel()
 		}()
 
-		tun := tcptunnel.New(
-			tcptunnel.WithDestinationHost(dstHost),
-			tcptunnel.WithProxyHost(pomeriumURL.Host),
-			tcptunnel.WithTLSConfig(tlsConfig),
-		)
-
 		if tcpCmdOptions.listen == "-" {
 			err = tun.Run(ctx, readWriter{Reader: os.Stdin, Writer: os.Stdout})
 		} else {
@@ -95,9 +65,44 @@ var tcpCmd = &cobra.Command{
 			_, _ = fmt.Fprintf(os.Stderr, "%s\n", err.Error())
 			os.Exit(1)
 		}
-
 		return nil
 	},
+}
+
+func newTCPTunnel(dstHost string, specificPomeriumURL string) (*tcptunnel.Tunnel, error) {
+	dstHostname, _, err := net.SplitHostPort(dstHost)
+	if err != nil {
+		return nil, fmt.Errorf("invalid destination: %w", err)
+	}
+
+	pomeriumURL := &url.URL{
+		Scheme: "https",
+		Host:   net.JoinHostPort(dstHostname, "443"),
+	}
+	if specificPomeriumURL != "" {
+		pomeriumURL, err = url.Parse(specificPomeriumURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pomerium URL: %w", err)
+		}
+		if !strings.Contains(pomeriumURL.Host, ":") {
+			if pomeriumURL.Scheme == "https" {
+				pomeriumURL.Host = net.JoinHostPort(pomeriumURL.Hostname(), "443")
+			} else {
+				pomeriumURL.Host = net.JoinHostPort(pomeriumURL.Hostname(), "80")
+			}
+		}
+	}
+
+	var tlsConfig *tls.Config
+	if pomeriumURL.Scheme == "https" {
+		tlsConfig = getTLSConfig()
+	}
+
+	return tcptunnel.New(
+		tcptunnel.WithDestinationHost(dstHost),
+		tcptunnel.WithProxyHost(pomeriumURL.Host),
+		tcptunnel.WithTLSConfig(tlsConfig),
+	), nil
 }
 
 type readWriter struct {
